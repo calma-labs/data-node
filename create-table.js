@@ -11,6 +11,7 @@ const DATASET = 'lending_poc';
 const SA      = process.env.IMPERSONATE_SA || 'lending-poc@calmal.iam.gserviceaccount.com';
 
 const POOL_SCHEMA = [
+  { name: 'id',            type: 'INT64',  mode: 'REQUIRED' },
   { name: 'reservePubkey', type: 'STRING', mode: 'REQUIRED' },
   { name: 'symbol',        type: 'STRING', mode: 'REQUIRED' },
   { name: 'mintAddress',   type: 'STRING', mode: 'REQUIRED' },
@@ -20,15 +21,15 @@ const POOL_SCHEMA = [
 ];
 
 const SNAPSHOTS_SCHEMA = [
-  { name: 'reservePubkey',  type: 'STRING',    mode: 'REQUIRED' },
-  { name: 'tvl',            type: 'NUMERIC',   mode: 'REQUIRED' },
-  { name: 'utilization',    type: 'NUMERIC',   mode: 'REQUIRED' },
-  { name: 'supplyAPY',      type: 'NUMERIC',   mode: 'REQUIRED' },
-  { name: 'borrowRate',     type: 'NUMERIC',   mode: 'REQUIRED' },
-  { name: 'borrowAPY',      type: 'NUMERIC',   mode: 'REQUIRED' },
-  { name: 'totalBorrowUsd', type: 'NUMERIC',   mode: 'REQUIRED' },
-  { name: 'liquidityUsd',   type: 'NUMERIC',   mode: 'REQUIRED' },
-  { name: 'fetchedAt',      type: 'TIMESTAMP', mode: 'REQUIRED' },
+  { name: 'poolId',        type: 'INT64',     mode: 'REQUIRED' },
+  { name: 'tvl',           type: 'NUMERIC',   mode: 'REQUIRED' },
+  { name: 'utilization',   type: 'NUMERIC',   mode: 'REQUIRED' },
+  { name: 'supplyAPY',     type: 'NUMERIC',   mode: 'REQUIRED' },
+  { name: 'borrowRate',    type: 'NUMERIC',   mode: 'REQUIRED' },
+  { name: 'borrowAPY',     type: 'NUMERIC',   mode: 'REQUIRED' },
+  { name: 'totalBorrowUsd',type: 'NUMERIC',   mode: 'REQUIRED' },
+  { name: 'liquidityUsd',  type: 'NUMERIC',   mode: 'REQUIRED' },
+  { name: 'fetchedAt',     type: 'TIMESTAMP', mode: 'REQUIRED' },
 ];
 
 (async () => {
@@ -46,6 +47,15 @@ const SNAPSHOTS_SCHEMA = [
   console.log(`[bq] impersonating ${SA}`);
 
   const ds = bq.dataset(DATASET);
+
+  for (const name of ['pool', 'snapshots']) {
+    const table = ds.table(name);
+    const [exists] = await table.exists();
+    if (exists) {
+      await table.delete();
+      console.log(`Deleted ${DATASET}.${name}`);
+    }
+  }
 
   const [pool]      = await ds.createTable('pool',      { schema: POOL_SCHEMA });
   const [snapshots] = await ds.createTable('snapshots', { schema: SNAPSHOTS_SCHEMA });
