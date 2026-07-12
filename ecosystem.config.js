@@ -4,10 +4,13 @@ module.exports = {
       name: 'data-node-poc',
       script: 'server.js',
       instances: 1,
+      exec_mode: 'cluster',
+      wait_ready: true,
+      listen_timeout: 5000,
       autorestart: true,
       watch: false,
       max_memory_restart: '256M',
-      env: {
+      env_production: {
         NODE_ENV: 'production',
         PORT: 3000,
       },

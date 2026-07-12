@@ -3,8 +3,13 @@
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
+const crypto = require('crypto');
 const { BigQuery } = require('@google-cloud/bigquery');
 const { GoogleAuth, Impersonated } = require('google-auth-library');
+
+function stablePoolId(reservePubkey) {
+  return parseInt(crypto.createHash('sha256').update(reservePubkey).digest('hex').slice(0, 8), 16);
+}
 
 const PORT = process.env.PORT || 3000;
 const POLL_MS = 5000;
@@ -37,7 +42,10 @@ async function commitPool(ds, usdc) {
   const reservePubkey = usdc.reserve;
   if (seenPools.has(reservePubkey)) return;
 
+  const id = stablePoolId(reservePubkey);
+
   await ds.table('pool').insert([{
+    id,
     reservePubkey,
     symbol:      usdc.liquidityToken,
     mintAddress: usdc.liquidityTokenMint,
@@ -47,29 +55,25 @@ async function commitPool(ds, usdc) {
   }]);
 
   seenPools.add(reservePubkey);
-  console.log(`[bq] registered pool ${reservePubkey}`);
+  console.log(`[bq] registered pool ${reservePubkey} → id ${id}`);
 }
 
 async function commitSnapshot(ds, usdc) {
-  const totalSupplyUsd = usdc.totalSupplyUsd;
-  const totalBorrowUsd = usdc.totalBorrowUsd;
-  const supplyAPY      = usdc.supplyApy;
-  const borrowAPY      = usdc.borrowApy;
-  const tvl            = totalSupplyUsd;
-  const utilization    = totalSupplyUsd > 0
-    ? Math.min(totalBorrowUsd / totalSupplyUsd, 1).toFixed(9)
-    : '0';
-  const liquidityUsd   = (totalSupplyUsd - totalBorrowUsd).toFixed(9);
+  // Use raw API strings for NUMERIC fields to preserve full precision.
+  // Derived fields (utilization, liquidityUsd) are computed in float
+  // only for the ratio/difference — precision loss there is immaterial.
+  const supplyF = parseFloat(usdc.totalSupplyUsd);
+  const borrowF = parseFloat(usdc.totalBorrowUsd);
 
   await ds.table('snapshots').insert([{
-    reservePubkey:  usdc.reserve,
-    tvl:            parseFloat(tvl).toFixed(9),
-    utilization,
-    supplyAPY:      parseFloat(supplyAPY).toFixed(9),
-    borrowRate:     parseFloat(borrowAPY).toFixed(9),
-    borrowAPY:      parseFloat(borrowAPY).toFixed(9),
-    totalBorrowUsd: parseFloat(totalBorrowUsd).toFixed(9),
-    liquidityUsd,
+    poolId:         stablePoolId(usdc.reserve),
+    tvl:            usdc.totalSupplyUsd,
+    utilization:    supplyF > 0 ? Math.min(borrowF / supplyF, 1).toFixed(9) : '0',
+    supplyAPY:      usdc.supplyApy,
+    borrowRate:     usdc.borrowApy,
+    borrowAPY:      usdc.borrowApy,
+    totalBorrowUsd: usdc.totalBorrowUsd,
+    liquidityUsd:   (supplyF - borrowF).toFixed(9),
     fetchedAt:      new Date().toISOString(),
   }]);
 }
@@ -182,10 +186,17 @@ async function main() {
   server.listen(PORT, () => {
     console.log(`[server] listening on port ${PORT}`);
     startPolling(ds);
+    if (process.send) process.send('ready');
   });
 
-  process.on('SIGTERM', () => server.close(() => process.exit(0)));
-  process.on('SIGINT',  () => server.close(() => process.exit(0)));
+  function shutdown() {
+    for (const res of clients) res.end();
+    clients.clear();
+    server.close(() => process.exit(0));
+  }
+
+  process.on('SIGTERM', shutdown);
+  process.on('SIGINT',  shutdown);
 }
 
 main().catch(err => {
