@@ -3,16 +3,24 @@
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
+const { BigQuery } = require('@google-cloud/bigquery');
+const { GoogleAuth, Impersonated } = require('google-auth-library');
 
 const PORT = process.env.PORT || 3000;
 const POLL_MS = 5000;
+const MARKET = '7u3HeHxYDLhnCoErrtycNokbQYbWGzLs6JSDqGAv5PfF';
 const RESERVES_URL =
-  'https://api.kamino.finance/kamino-market/7u3HeHxYDLhnCoErrtycNokbQYbWGzLs6JSDqGAv5PfF/reserves/metrics';
+  `https://api.kamino.finance/kamino-market/${MARKET}/reserves/metrics`;
+
+const BQ_PROJECT = process.env.BIGQUERY_PROJECT_ID || 'calmal';
+const BQ_DATASET = process.env.BIGQUERY_DATASET    || 'lending_poc';
+const BQ_SA      = process.env.IMPERSONATE_SA      || 'lending-poc@calmal.iam.gserviceaccount.com';
 
 const htmlContent = fs.readFileSync(path.join(__dirname, 'public', 'index.html'));
 
 let latestData = null;
 const clients = new Set();
+const seenPools = new Set();
 
 function formatSSE(data) {
   return `event: update\ndata: ${JSON.stringify(data)}\n\n`;
@@ -25,7 +33,48 @@ function broadcast(data) {
   }
 }
 
-async function fetchUSDC() {
+async function commitPool(ds, usdc) {
+  const reservePubkey = usdc.reserve;
+  if (seenPools.has(reservePubkey)) return;
+
+  await ds.table('pool').insert([{
+    reservePubkey,
+    symbol:      usdc.liquidityToken,
+    mintAddress: usdc.liquidityTokenMint,
+    lending:     'Kamino',
+    chain:       'Solana',
+    market:      MARKET,
+  }]);
+
+  seenPools.add(reservePubkey);
+  console.log(`[bq] registered pool ${reservePubkey}`);
+}
+
+async function commitSnapshot(ds, usdc) {
+  const totalSupplyUsd = usdc.totalSupplyUsd;
+  const totalBorrowUsd = usdc.totalBorrowUsd;
+  const supplyAPY      = usdc.supplyApy;
+  const borrowAPY      = usdc.borrowApy;
+  const tvl            = totalSupplyUsd;
+  const utilization    = totalSupplyUsd > 0
+    ? Math.min(totalBorrowUsd / totalSupplyUsd, 1).toFixed(9)
+    : '0';
+  const liquidityUsd   = (totalSupplyUsd - totalBorrowUsd).toFixed(9);
+
+  await ds.table('snapshots').insert([{
+    reservePubkey:  usdc.reserve,
+    tvl:            parseFloat(tvl).toFixed(9),
+    utilization,
+    supplyAPY:      parseFloat(supplyAPY).toFixed(9),
+    borrowRate:     parseFloat(borrowAPY).toFixed(9),
+    borrowAPY:      parseFloat(borrowAPY).toFixed(9),
+    totalBorrowUsd: parseFloat(totalBorrowUsd).toFixed(9),
+    liquidityUsd,
+    fetchedAt:      new Date().toISOString(),
+  }]);
+}
+
+async function fetchUSDC(ds) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 10_000);
 
@@ -45,31 +94,31 @@ async function fetchUSDC() {
 
     const totalSupplyUsd = parseFloat(usdc.totalSupplyUsd);
     const totalBorrowUsd = parseFloat(usdc.totalBorrowUsd);
-    const utilizationRate = totalSupplyUsd > 0
-      ? Math.min(totalBorrowUsd / totalSupplyUsd, 1)
-      : 0;
 
     latestData = {
-      reservePubkey: usdc.reserve,
-      supplyApy: parseFloat(usdc.supplyApy),
-      borrowApy: parseFloat(usdc.borrowApy),
+      reservePubkey:  usdc.reserve,
+      supplyApy:      parseFloat(usdc.supplyApy),
+      borrowApy:      parseFloat(usdc.borrowApy),
       totalSupplyUsd,
       totalBorrowUsd,
-      utilizationRate,
-      liquidityUsd: totalSupplyUsd - totalBorrowUsd,
-      fetchedAt: new Date().toISOString(),
+      utilizationRate: totalSupplyUsd > 0 ? Math.min(totalBorrowUsd / totalSupplyUsd, 1) : 0,
+      liquidityUsd:    totalSupplyUsd - totalBorrowUsd,
+      fetchedAt:       new Date().toISOString(),
     };
 
     broadcast(latestData);
+
+    commitPool(ds, usdc).catch(err => console.error('[bq:pool]', err.message));
+    commitSnapshot(ds, usdc).catch(err => console.error('[bq:snapshots]', err.message));
   } finally {
     clearTimeout(timer);
   }
 }
 
-function startPolling() {
-  fetchUSDC().catch(err => console.error('[init]', err.message));
+function startPolling(ds) {
+  fetchUSDC(ds).catch(err => console.error('[init]', err.message));
   setInterval(() => {
-    fetchUSDC().catch(err => console.error('[poll]', err.message));
+    fetchUSDC(ds).catch(err => console.error('[poll]', err.message));
   }, POLL_MS);
 }
 
@@ -113,12 +162,33 @@ function requestHandler(req, res) {
   }
 }
 
-const server = http.createServer(requestHandler);
+async function main() {
+  const base = new GoogleAuth();
+  const sourceClient = await base.getClient();
 
-server.listen(PORT, () => {
-  console.log(`[server] listening on port ${PORT}`);
-  startPolling();
+  const impersonated = new Impersonated({
+    sourceClient,
+    targetPrincipal: BQ_SA,
+    lifetime: 3600,
+    targetScopes: ['https://www.googleapis.com/auth/bigquery'],
+  });
+
+  const bigquery = new BigQuery({ projectId: BQ_PROJECT, authClient: impersonated });
+  console.log(`[bq] impersonating ${BQ_SA}`);
+
+  const ds = bigquery.dataset(BQ_DATASET);
+  const server = http.createServer(requestHandler);
+
+  server.listen(PORT, () => {
+    console.log(`[server] listening on port ${PORT}`);
+    startPolling(ds);
+  });
+
+  process.on('SIGTERM', () => server.close(() => process.exit(0)));
+  process.on('SIGINT',  () => server.close(() => process.exit(0)));
+}
+
+main().catch(err => {
+  console.error('[fatal]', err.message);
+  process.exit(1);
 });
-
-process.on('SIGTERM', () => server.close(() => process.exit(0)));
-process.on('SIGINT', () => server.close(() => process.exit(0)));
