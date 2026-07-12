@@ -1,0 +1,316 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Kamino · USDC Lending</title>
+  <style>
+    :root {
+      --bg: #0f1117;
+      --surface: #1a1d27;
+      --border: #2a2d3a;
+      --text: #e2e8f0;
+      --muted: #64748b;
+      --accent: #38bdf8;
+      --green: #4ade80;
+      --yellow: #fbbf24;
+      --red: #f87171;
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', 'Consolas', monospace;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 100vh;
+      padding: 1.5rem;
+    }
+
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      width: 100%;
+      max-width: 420px;
+      overflow: hidden;
+    }
+
+    .header {
+      padding: 1.25rem 1.5rem 1rem;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .header-title {
+      font-size: 0.7rem;
+      letter-spacing: 0.12em;
+      color: var(--muted);
+      text-transform: uppercase;
+      margin-bottom: 0.25rem;
+    }
+
+    .header-name {
+      font-size: 1.1rem;
+      font-weight: 700;
+      color: var(--accent);
+      letter-spacing: 0.04em;
+    }
+
+    .stats {
+      padding: 0.75rem 0;
+    }
+
+    .stat-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: baseline;
+      padding: 0.5rem 1.5rem;
+    }
+
+    .stat-row:hover {
+      background: rgba(255, 255, 255, 0.03);
+    }
+
+    .stat-label {
+      font-size: 0.8rem;
+      color: var(--muted);
+      letter-spacing: 0.03em;
+    }
+
+    .stat-value {
+      font-size: 0.95rem;
+      font-weight: 600;
+      color: var(--text);
+      font-variant-numeric: tabular-nums;
+    }
+
+    .stat-value.loading {
+      color: var(--border);
+    }
+
+    .divider {
+      height: 1px;
+      background: var(--border);
+      margin: 0.5rem 0;
+    }
+
+    .util-section {
+      padding: 0 1.5rem 0.25rem;
+    }
+
+    .util-bar-track {
+      height: 4px;
+      background: var(--border);
+      border-radius: 2px;
+      overflow: hidden;
+      margin-top: 0.25rem;
+    }
+
+    .util-bar-fill {
+      height: 100%;
+      border-radius: 2px;
+      width: 0%;
+      transition: width 0.6s ease, background-color 0.4s ease;
+      background: var(--green);
+    }
+
+    .util-bar-fill.warn {
+      background: var(--yellow);
+    }
+
+    .util-bar-fill.crit {
+      background: var(--red);
+    }
+
+    .footer {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 0.85rem 1.5rem;
+      border-top: 1px solid var(--border);
+    }
+
+    .status {
+      display: flex;
+      align-items: center;
+      gap: 0.45rem;
+      font-size: 0.75rem;
+      color: var(--muted);
+    }
+
+    .dot {
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: var(--border);
+      flex-shrink: 0;
+    }
+
+    .dot.connected {
+      background: var(--green);
+      animation: pulse 2s ease-in-out infinite;
+    }
+
+    .dot.error {
+      background: var(--red);
+    }
+
+    @keyframes pulse {
+
+      0%,
+      100% {
+        opacity: 1;
+      }
+
+      50% {
+        opacity: 0.35;
+      }
+    }
+
+    .updated-at {
+      font-size: 0.72rem;
+      color: var(--muted);
+      font-variant-numeric: tabular-nums;
+    }
+  </style>
+</head>
+
+<body>
+  <div class="card">
+    <div class="header">
+      <div class="header-title">Kamino Finance · Main Market</div>
+      <div class="header-name">USDC Lending</div>
+    </div>
+
+    <div class="stats">
+      <div class="stat-row">
+        <span class="stat-label">Supply APY</span>
+        <span class="stat-value loading" id="supplyApy">—</span>
+      </div>
+      <div class="stat-row">
+        <span class="stat-label">Borrow APY</span>
+        <span class="stat-value loading" id="borrowApy">—</span>
+      </div>
+
+      <div class="divider"></div>
+
+      <div class="stat-row">
+        <span class="stat-label">Utilization</span>
+        <span class="stat-value loading" id="utilRate">—</span>
+      </div>
+      <div class="util-section">
+        <div class="util-bar-track">
+          <div class="util-bar-fill" id="utilBar"></div>
+        </div>
+      </div>
+
+      <div class="divider"></div>
+
+      <div class="stat-row">
+        <span class="stat-label">Total Supply</span>
+        <span class="stat-value loading" id="totalSupply">—</span>
+      </div>
+      <div class="stat-row">
+        <span class="stat-label">Total Borrows</span>
+        <span class="stat-value loading" id="totalBorrows">—</span>
+      </div>
+      <div class="stat-row">
+        <span class="stat-label">Available</span>
+        <span class="stat-value loading" id="available">—</span>
+      </div>
+    </div>
+
+    <div class="footer">
+      <div class="status">
+        <span class="dot" id="dot"></span>
+        <span id="statusText">Connecting…</span>
+      </div>
+      <span class="updated-at" id="updatedAt"></span>
+    </div>
+  </div>
+
+  <script>
+    function fmtPct(v) {
+      return (v * 100).toFixed(6) + '%';
+    }
+
+    function fmtUsd(v) {
+      return '$' + v.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    }
+
+    function fmtTime(iso) {
+      return new Date(iso).toLocaleTimeString('en-US', {
+        hour12: false,
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit',
+      });
+    }
+
+    function applyData(d) {
+      console.log(d);
+      const els = {
+        supplyApy: document.getElementById('supplyApy'),
+        borrowApy: document.getElementById('borrowApy'),
+        utilRate: document.getElementById('utilRate'),
+        utilBar: document.getElementById('utilBar'),
+        totalSupply: document.getElementById('totalSupply'),
+        totalBorrows: document.getElementById('totalBorrows'),
+        available: document.getElementById('available'),
+        updatedAt: document.getElementById('updatedAt'),
+      };
+
+      els.supplyApy.textContent = fmtPct(d.supplyApy);
+      els.borrowApy.textContent = fmtPct(d.borrowApy);
+      els.utilRate.textContent = fmtPct(d.utilizationRate);
+      els.totalSupply.textContent = fmtUsd(d.totalSupplyUsd);
+      els.totalBorrows.textContent = fmtUsd(d.totalBorrowUsd);
+      els.available.textContent = fmtUsd(d.liquidityUsd);
+      els.updatedAt.textContent = fmtTime(d.fetchedAt);
+
+      const pct = (d.utilizationRate * 100).toFixed(1);
+      els.utilBar.style.width = pct + '%';
+      els.utilBar.className = 'util-bar-fill' +
+        (d.utilizationRate >= 0.85 ? ' crit' : d.utilizationRate >= 0.7 ? ' warn' : '');
+
+      // Remove loading style once we have real data
+      document.querySelectorAll('.stat-value.loading').forEach(el => {
+        el.classList.remove('loading');
+      });
+    }
+
+    function connect() {
+      const es = new EventSource('/events');
+      const dot = document.getElementById('dot');
+      const statusText = document.getElementById('statusText');
+
+      es.addEventListener('update', e => {
+        try {
+          applyData(JSON.parse(e.data));
+          dot.className = 'dot connected';
+          statusText.textContent = 'Live';
+        } catch (err) {
+          console.error('parse error', err);
+        }
+      });
+
+      es.onerror = () => {
+        dot.className = 'dot error';
+        statusText.textContent = 'Reconnecting…';
+        // EventSource reconnects automatically
+      };
+    }
+
+    connect();
+  </script>
+</body>
+
+</html>
