@@ -13,7 +13,8 @@ jobs:
 
     env:
       PROJECT: calmal
-      VM: dashboard
+      VM: dashboard-data-node
+      ZONE: europe-west1-b
       DEPLOY_DIR: /var/www/data-node-poc
 
     steps:
@@ -26,39 +27,24 @@ jobs:
 
       - uses: google-github-actions/setup-gcloud@v2
 
-      - name: Resolve VM zone
-        id: vm
-        run: |
-          ZONE=$(gcloud compute instances list \
-            --project=$PROJECT \
-            --filter="name=$VM" \
-            --format="get(zone)" | xargs basename)
-          echo "zone=$ZONE" >> $GITHUB_OUTPUT
-
       - name: Backup current deployment
         id: backup
         run: |
           gcloud compute ssh $VM \
-            --project=$PROJECT \
-            --zone=${{ steps.vm.outputs.zone }} \
-            --tunnel-through-iap \
+            --project=$PROJECT --zone=$ZONE --tunnel-through-iap \
             --command="rsync -a --delete --exclude=node_modules $DEPLOY_DIR/ ${DEPLOY_DIR}.bak/"
 
       - name: Upload new files
         run: |
           tar --exclude=./node_modules --exclude=./.git -czf /tmp/app.tar.gz .
           gcloud compute scp /tmp/app.tar.gz $VM:/tmp/app.tar.gz \
-            --project=$PROJECT \
-            --zone=${{ steps.vm.outputs.zone }} \
-            --tunnel-through-iap
+            --project=$PROJECT --zone=$ZONE --tunnel-through-iap
 
       - name: Install and reload
         id: reload
         run: |
           gcloud compute ssh $VM \
-            --project=$PROJECT \
-            --zone=${{ steps.vm.outputs.zone }} \
-            --tunnel-through-iap \
+            --project=$PROJECT --zone=$ZONE --tunnel-through-iap \
             --command="
               set -e
               tar -xzf /tmp/app.tar.gz -C $DEPLOY_DIR
@@ -71,9 +57,7 @@ jobs:
         if: failure() && steps.backup.conclusion == 'success'
         run: |
           gcloud compute ssh $VM \
-            --project=$PROJECT \
-            --zone=${{ steps.vm.outputs.zone }} \
-            --tunnel-through-iap \
+            --project=$PROJECT --zone=$ZONE --tunnel-through-iap \
             --command="
               set -e
               rsync -a --delete --exclude=node_modules ${DEPLOY_DIR}.bak/ $DEPLOY_DIR/
