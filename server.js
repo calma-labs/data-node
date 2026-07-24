@@ -6,16 +6,11 @@ const path = require('path');
 const crypto = require('crypto');
 const { BigQuery } = require('@google-cloud/bigquery');
 const { GoogleAuth, Impersonated } = require('google-auth-library');
+const { fetchAllProtocolMetrics } = require('./fetchers');
 
-function stablePoolId(reservePubkey) {
-  return parseInt(crypto.createHash('sha256').update(reservePubkey).digest('hex').slice(0, 8), 16);
-}
 
 const PORT = process.env.PORT || 3000;
 const POLL_MS = 5000;
-const MARKET = '7u3HeHxYDLhnCoErrtycNokbQYbWGzLs6JSDqGAv5PfF';
-const RESERVES_URL =
-  `https://api.kamino.finance/kamino-market/${MARKET}/reserves/metrics`;
 
 const BQ_PROJECT = process.env.BIGQUERY_PROJECT_ID || 'calmal';
 const BQ_DATASET = process.env.BIGQUERY_DATASET    || 'lending_poc';
@@ -25,7 +20,8 @@ const htmlContent = fs.readFileSync(path.join(__dirname, 'public', 'index.html')
 
 let latestData = null;
 const clients = new Set();
-const seenPools = new Set();
+const seenGenericPools = new Set();
+let isPolling = false;
 
 function formatSSE(data) {
   return `event: update\ndata: ${JSON.stringify(data)}\n\n`;
@@ -38,92 +34,71 @@ function broadcast(data) {
   }
 }
 
-async function commitPool(ds, usdc) {
-  const reservePubkey = usdc.reserve;
-  if (seenPools.has(reservePubkey)) return;
-
-  const id = stablePoolId(reservePubkey);
-
-  await ds.table('pool').insert([{
-    id,
-    reservePubkey,
-    symbol:      usdc.liquidityToken,
-    mintAddress: usdc.liquidityTokenMint,
-    lending:     'Kamino',
-    chain:       'Solana',
-    market:      MARKET,
-  }]);
-
-  seenPools.add(reservePubkey);
-  console.log(`[bq] registered pool ${reservePubkey} → id ${id}`);
+function stableGenericPoolId(metric) {
+  const key = `${metric.mintAddress}:${metric.lending}:${metric.market}`;
+  return parseInt(crypto.createHash('sha256').update(key).digest('hex').slice(0, 8), 16);
 }
 
-async function commitSnapshot(ds, usdc) {
-  // Use raw API strings for NUMERIC fields to preserve full precision.
-  // Derived fields (utilization, liquidityUsd) are computed in float
-  // only for the ratio/difference — precision loss there is immaterial.
-  const supplyF = parseFloat(usdc.totalSupplyUsd);
-  const borrowF = parseFloat(usdc.totalBorrowUsd);
-
-  await ds.table('snapshots').insert([{
-    poolId:         stablePoolId(usdc.reserve),
-    tvl:            usdc.totalSupplyUsd,
-    utilization:    supplyF > 0 ? Math.min(borrowF / supplyF, 1).toFixed(9) : '0',
-    supplyAPY:      usdc.supplyApy,
-    borrowRate:     usdc.borrowApy,
-    borrowAPY:      usdc.borrowApy,
-    totalBorrowUsd: usdc.totalBorrowUsd,
-    liquidityUsd:   (supplyF - borrowF).toFixed(9),
-    fetchedAt:      new Date().toISOString(),
-  }]);
-}
-
-async function fetchUSDC(ds) {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 10_000);
-
+async function commitGenericPool(ds, metric) {
+  const key = `${metric.mintAddress}:${metric.lending}:${metric.market}`;
+  if (seenGenericPools.has(key)) return;
+  seenGenericPools.add(key);
+  const id = stableGenericPoolId(metric);
   try {
-    const response = await fetch(RESERVES_URL, { signal: controller.signal });
-    if (!response.ok) throw new Error(`HTTP ${response.status}`);
-
-    const reserves = await response.json();
-
-    const usdcReserves = reserves.filter(r => r.liquidityToken === 'USDC');
-    if (usdcReserves.length === 0) throw new Error('No USDC reserve found');
-
-    // Pick the reserve with the largest total supply (the main one)
-    const usdc = usdcReserves.reduce((best, r) =>
-      parseFloat(r.totalSupplyUsd) > parseFloat(best.totalSupplyUsd) ? r : best
-    );
-
-    const totalSupplyUsd = parseFloat(usdc.totalSupplyUsd);
-    const totalBorrowUsd = parseFloat(usdc.totalBorrowUsd);
-
-    latestData = {
-      reservePubkey:  usdc.reserve,
-      supplyApy:      parseFloat(usdc.supplyApy),
-      borrowApy:      parseFloat(usdc.borrowApy),
-      totalSupplyUsd,
-      totalBorrowUsd,
-      utilizationRate: totalSupplyUsd > 0 ? Math.min(totalBorrowUsd / totalSupplyUsd, 1) : 0,
-      liquidityUsd:    totalSupplyUsd - totalBorrowUsd,
-      fetchedAt:       new Date().toISOString(),
-    };
-
-    broadcast(latestData);
-
-    commitPool(ds, usdc).catch(err => console.error('[bq:pool]', err.message));
-    commitSnapshot(ds, usdc).catch(err => console.error('[bq:snapshots]', err.message));
-  } finally {
-    clearTimeout(timer);
+    await ds.table('pool').insert([{
+      id,
+      reservePubkey: metric.mintAddress,
+      symbol:        metric.symbol,
+      mintAddress:   metric.mintAddress,
+      lending:       metric.lending,
+      chain:         metric.chain,
+      market:        metric.market,
+    }]);
+    console.log(`[bq] registered generic pool ${key} → id ${id}`);
+  } catch (err) {
+    seenGenericPools.delete(key);
+    throw err;
   }
 }
 
-function startPolling(ds) {
-  fetchUSDC(ds).catch(err => console.error('[init]', err.message));
-  setInterval(() => {
-    fetchUSDC(ds).catch(err => console.error('[poll]', err.message));
-  }, POLL_MS);
+function safeNum(v) {
+  const n = Number(v);
+  return isFinite(n) ? n : 0;
+}
+
+async function commitGenericSnapshot(ds, metric) {
+  const tvl   = safeNum(metric.tvl);
+  const utilF = safeNum(metric.utilization) / 100;
+  const borrow  = parseFloat((tvl * utilF).toFixed(9));
+  const liquid  = parseFloat((tvl - borrow).toFixed(9));
+  await ds.table('snapshots').insert([{
+    poolId:          stableGenericPoolId(metric),
+    tvl:             String(tvl),
+    utilization:     String(utilF.toFixed(9)),
+    supplyAPY:       String(safeNum(metric.supplyAPY)),
+    borrowRate:      String(safeNum(metric.borrowRate)),
+    borrowAPY:       String(safeNum(metric.borrowAPY)),
+    totalBorrowUsd:  String(borrow),
+    liquidityUsd:    String(liquid),
+    fetchedAt:       new Date().toISOString(),
+  }]);
+}
+
+async function pollProtocols(ds) {
+  if (isPolling) return;
+  isPolling = true;
+  try {
+    const metrics = await fetchAllProtocolMetrics();
+    console.log(`[protocols] fetched ${metrics.length} metrics`);
+    for (const metric of metrics) {
+      commitGenericPool(ds, metric).catch(err => console.error('[bq:generic:pool]', err.message));
+      commitGenericSnapshot(ds, metric).catch(err => console.error('[bq:generic:snapshot]', err.message));
+    }
+  } catch (err) {
+    console.error('[protocols] poll error:', err.message);
+  } finally {
+    isPolling = false;
+  }
 }
 
 // Heartbeat keeps SSE connections alive through proxies
@@ -134,6 +109,11 @@ setInterval(() => {
 }, 30_000);
 
 function handleSSE(req, res) {
+  if (clients.size >= 100) {
+    res.writeHead(503, { 'Retry-After': '10' });
+    res.end();
+    return;
+  }
   res.writeHead(200, {
     'Content-Type': 'text/event-stream',
     'Cache-Control': 'no-cache',
@@ -185,7 +165,8 @@ async function main() {
 
   server.listen(PORT, () => {
     console.log(`[server] listening on port ${PORT}`);
-    startPolling(ds);
+    pollProtocols(ds);
+    setInterval(() => pollProtocols(ds), POLL_MS);
     if (process.send) process.send('ready');
   });
 
