@@ -50,6 +50,7 @@ export interface KaminoMarketConfig {
 }
 
 export interface MorphoMarket {
+  marketId: string;
   loanAsset: { symbol: string; address: string; decimals: number };
   collateralAsset: { symbol: string } | null;
   lltv: string | null;
@@ -61,6 +62,7 @@ export interface MorphoMarket {
     borrowApy: number;
   };
 }
+
 
 export interface BorrowVault {
   id: number;
@@ -149,3 +151,26 @@ export interface BQSchemaField {
   type: string;
   mode: string;
 }
+
+export interface TokenHistoryPoint {
+  date: string;
+  apy: number;
+  utilization: number | null;
+}
+
+export interface TokenSnapshot {
+  tvl: number;
+  supplyAPY: number;
+  borrowRate: number;
+  utilization: number;
+  protocolTotalActiveLoans?: number | null;
+}
+
+export interface TokenDataResult {
+  history: TokenHistoryPoint[];
+  poolId: string;
+  source: string;
+  matchedSymbol: string;
+  snapshot?: TokenSnapshot | null;
+}
+

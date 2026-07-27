@@ -1,6 +1,15 @@
-import type { StandarizedMetric, MorphoMarket, GraphQLResponse } from '../types.js';
+import type {
+  StandarizedMetric,
+  MorphoMarket,
+  GraphQLResponse,
+  TokenDataResult,
+  TokenHistoryPoint,
+  TokenSnapshot,
+} from '../types.js';
+import { symbolMatches } from './defillama.js';
 
 const MORPHO_API = 'https://api.morpho.org/graphql';
+
 
 const CHAIN_NAMES: Record<number, string> = {
   1: 'Ethereum',
@@ -16,8 +25,10 @@ const MORPHO_QUERY = `
       where: { chainId_in: [1, 8453], listed: true }
     ) {
       items {
+        marketId
         loanAsset { address symbol decimals }
         collateralAsset { symbol }
+
         lltv
         chain { id }
         state {
@@ -84,3 +95,109 @@ export async function fetchMorphoMetrics(): Promise<StandarizedMetric[]> {
       };
     });
 }
+
+const MORPHO_HISTORY_QUERY = `
+  query MarketApys($marketId: String!, $chainId: Int!, $options: TimeseriesOptions) {
+    marketById(marketId: $marketId, chainId: $chainId) {
+      state {
+        supplyAssetsUsd
+        borrowAssetsUsd
+        utilization
+        supplyApy
+        borrowApy
+      }
+      historicalState {
+        supplyApy(options: $options) { x y }
+      }
+    }
+  }
+`;
+
+export async function fetchMorphoPlot(
+  symbol: string,
+  collateral?: string,
+): Promise<TokenDataResult | null> {
+  const markets = await fetchMorphoMarkets();
+
+  const matching = markets.filter((m) => {
+    if (!symbolMatches(m.loanAsset.symbol, symbol)) return false;
+    if (collateral) {
+      if (!m.collateralAsset) return false;
+      if (!symbolMatches(m.collateralAsset.symbol, collateral)) return false;
+    }
+    return true;
+  });
+
+  if (matching.length === 0) return null;
+
+  matching.sort((a, b) => b.state.supplyAssetsUsd - a.state.supplyAssetsUsd);
+  const best = matching[0];
+
+  const now = Math.floor(Date.now() / 1000);
+  const stableNow = now - (now % 600);
+  const startTimestamp = stableNow - 400 * 24 * 60 * 60;
+
+  let history: TokenHistoryPoint[] = [];
+  let latestState = best.state;
+
+  try {
+    const res = await fetch(MORPHO_API, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        query: MORPHO_HISTORY_QUERY,
+        variables: {
+          marketId: best.marketId,
+          chainId: best.chain.id,
+          options: {
+            startTimestamp,
+            endTimestamp: stableNow,
+            interval: 'DAY',
+          },
+        },
+      }),
+    });
+    if (res.ok) {
+      const json = (await res.json()) as {
+        data?: {
+          marketById?: {
+            state?: typeof best.state;
+            historicalState?: {
+              supplyApy?: { x: number; y: number }[];
+            };
+          };
+        };
+      };
+      const marketData = json.data?.marketById;
+      if (marketData?.state) {
+        latestState = marketData.state;
+      }
+      const points = marketData?.historicalState?.supplyApy ?? [];
+      history = points
+        .filter((p) => p && p.x && p.y !== undefined)
+        .map((p) => ({
+          date: new Date(p.x * 1000).toISOString(),
+          apy: parseFloat((p.y * 100).toFixed(2)),
+          utilization: null,
+        }));
+    }
+  } catch {
+  }
+
+  const snapshot: TokenSnapshot = {
+    tvl: Math.round(latestState.supplyAssetsUsd),
+    supplyAPY: parseFloat((latestState.supplyApy * 100).toFixed(2)),
+    borrowRate: parseFloat((latestState.borrowApy * 100).toFixed(2)),
+    utilization: parseFloat((latestState.utilization * 100).toFixed(2)),
+  };
+
+  return {
+    history,
+    poolId: best.marketId,
+    source: 'morpho',
+    matchedSymbol: best.loanAsset.symbol,
+    snapshot,
+  };
+}
+
+

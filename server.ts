@@ -4,8 +4,9 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { BigQuery, Dataset } from '@google-cloud/bigquery';
 import { GoogleAuth, Impersonated } from 'google-auth-library';
-import { fetchAllProtocolMetrics } from './src/fetchers/index.js';
+import { fetchAllProtocolMetrics, fetchPlotData } from './src/fetchers/index.js';
 import type { StandarizedMetric, PoolRow, SnapshotRow } from './src/types.js';
+
 
 const PORT: number = Number(process.env.PORT) || 3000;
 const POLL_MS = 5000;
@@ -134,19 +135,49 @@ function handleSSE(req: http.IncomingMessage, res: http.ServerResponse): void {
 }
 
 function requestHandler(req: http.IncomingMessage, res: http.ServerResponse): void {
-  if (req.method === 'GET' && req.url === '/') {
+  const urlObj = new URL(req.url || '/', `http://${req.headers.host || 'localhost'}`);
+  const pathname = urlObj.pathname;
+
+  if (req.method === 'GET' && pathname === '/') {
     res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
     res.end(htmlContent);
-  } else if (req.method === 'GET' && req.url === '/events') {
+  } else if (req.method === 'GET' && pathname === '/events') {
     handleSSE(req, res);
-  } else if (req.method === 'GET' && req.url === '/health') {
+  } else if (req.method === 'GET' && pathname === '/health') {
     res.writeHead(200, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({ status: 'ok', lastFetchedAt: latestData?.fetchedAt ?? null }));
+  } else if (req.method === 'GET' && (pathname === '/chart' || pathname === '/api/chart')) {
+    const protocol = urlObj.searchParams.get('protocol') || urlObj.searchParams.get('platform') || '';
+    const symbol = urlObj.searchParams.get('symbol') || urlObj.searchParams.get('asset') || '';
+    const collateral = urlObj.searchParams.get('collateral') || undefined;
+
+    if (!protocol || !symbol) {
+      res.writeHead(400, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' });
+      res.end(JSON.stringify({ error: 'Missing protocol or symbol parameter' }));
+      return;
+    }
+
+    fetchPlotData(protocol, symbol, collateral)
+      .then((data) => {
+        if (!data || (data.history.length === 0 && !data.poolId)) {
+          res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Access-Control-Allow-Origin': '*' });
+          res.end(JSON.stringify({ history: [], poolId: null, source: null }));
+          return;
+        }
+        res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Access-Control-Allow-Origin': '*' });
+        res.end(JSON.stringify(data));
+      })
+
+      .catch((err: Error) => {
+        res.writeHead(500, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' });
+        res.end(JSON.stringify({ error: err.message }));
+      });
   } else {
     res.writeHead(404);
     res.end('Not found');
   }
 }
+
 
 async function main(): Promise<void> {
   const base = new GoogleAuth();

@@ -1,5 +1,13 @@
-import type { StandarizedMetric, BorrowVault } from '../types.js';
+import type {
+  StandarizedMetric,
+  BorrowVault,
+  TokenDataResult,
+  TokenHistoryPoint,
+  TokenSnapshot,
+} from '../types.js';
 import { PublicKey } from '@solana/web3.js';
+import { symbolMatches, fetchDefiLlamaPlot } from './defillama.js';
+
 
 const JUP_API = 'https://lite-api.jup.ag/lend/v1';
 const RPC_URL = `https://mainnet.helius-rpc.com/?api-key=${process.env.HELIUS_API_KEY}`;
@@ -166,3 +174,46 @@ export async function fetchJupiterMetrics(): Promise<StandarizedMetric[]> {
 
   return fetchEarnTokens();
 }
+
+export async function fetchJupiterPlot(
+  symbol: string,
+  collateral?: string,
+): Promise<TokenDataResult | null> {
+  const metrics = await fetchJupiterMetrics();
+  const matching = metrics.filter((m) => {
+    if (!symbolMatches(m.symbol, symbol)) return false;
+    if (collateral) {
+      if (!m.collateral || !symbolMatches(m.collateral, collateral)) return false;
+    }
+    return true;
+  });
+  if (matching.length === 0) return null;
+
+  matching.sort((a, b) => b.tvl - a.tvl);
+  const best = matching[0];
+
+  let history: TokenHistoryPoint[] = [];
+  try {
+    const llamaRes = await fetchDefiLlamaPlot('jupiter', symbol, collateral);
+    if (llamaRes && llamaRes.history.length > 0) {
+      history = llamaRes.history;
+    }
+  } catch {
+  }
+
+  const snapshot: TokenSnapshot = {
+    tvl: Math.round(best.tvl),
+    supplyAPY: best.supplyAPY,
+    borrowRate: best.borrowRate,
+    utilization: best.utilization,
+  };
+
+  return {
+    history,
+    poolId: best.mintAddress || symbol,
+    source: 'jupiter',
+    matchedSymbol: best.symbol,
+    snapshot,
+  };
+}
+
