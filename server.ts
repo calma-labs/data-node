@@ -1,59 +1,58 @@
-'use strict';
+import http from 'node:http';
+import fs from 'node:fs';
+import path from 'node:path';
+import crypto from 'node:crypto';
+import { BigQuery, Dataset } from '@google-cloud/bigquery';
+import { GoogleAuth, Impersonated } from 'google-auth-library';
+import { fetchAllProtocolMetrics } from './src/fetchers/index.js';
+import type { StandarizedMetric, PoolRow, SnapshotRow } from './src/types.js';
 
-const http = require('http');
-const fs = require('fs');
-const path = require('path');
-const crypto = require('crypto');
-const { BigQuery } = require('@google-cloud/bigquery');
-const { GoogleAuth, Impersonated } = require('google-auth-library');
-const { fetchAllProtocolMetrics } = require('./fetchers');
-
-
-const PORT = process.env.PORT || 3000;
+const PORT: number = Number(process.env.PORT) || 3000;
 const POLL_MS = 5000;
 
-const BQ_PROJECT = process.env.BIGQUERY_PROJECT_ID || 'calmal';
-const BQ_DATASET = process.env.BIGQUERY_DATASET    || 'lending_poc';
-const BQ_SA      = process.env.IMPERSONATE_SA      || 'lending-poc@calmal.iam.gserviceaccount.com';
+const BQ_PROJECT: string = process.env.BIGQUERY_PROJECT_ID || 'calmal';
+const BQ_DATASET: string = process.env.BIGQUERY_DATASET || 'lending_poc';
+const BQ_SA: string = process.env.IMPERSONATE_SA || 'lending-poc@calmal.iam.gserviceaccount.com';
 
-const htmlContent = fs.readFileSync(path.join(__dirname, 'public', 'index.html'));
+const htmlContent: Buffer = fs.readFileSync(path.join(__dirname, 'public', 'index.html'));
 
-let latestData = null;
-const clients = new Set();
-const seenGenericPools = new Set();
+let latestData: { fetchedAt: string } | null = null;
+const clients: Set<http.ServerResponse> = new Set();
+const seenGenericPools: Set<string> = new Set();
 let isPolling = false;
 
-function formatSSE(data) {
+function formatSSE(data: unknown): string {
   return `event: update\ndata: ${JSON.stringify(data)}\n\n`;
 }
 
-function broadcast(data) {
+function broadcast(data: unknown): void {
   const msg = formatSSE(data);
   for (const res of clients) {
     res.write(msg);
   }
 }
 
-function stableGenericPoolId(metric) {
+function stableGenericPoolId(metric: StandarizedMetric): number {
   const key = `${metric.mintAddress}:${metric.lending}:${metric.market}`;
   return parseInt(crypto.createHash('sha256').update(key).digest('hex').slice(0, 8), 16);
 }
 
-async function commitGenericPool(ds, metric) {
+async function commitGenericPool(ds: Dataset, metric: StandarizedMetric): Promise<void> {
   const key = `${metric.mintAddress}:${metric.lending}:${metric.market}`;
   if (seenGenericPools.has(key)) return;
   seenGenericPools.add(key);
   const id = stableGenericPoolId(metric);
   try {
-    await ds.table('pool').insert([{
+    const row: PoolRow = {
       id,
       reservePubkey: metric.mintAddress,
-      symbol:        metric.symbol,
-      mintAddress:   metric.mintAddress,
-      lending:       metric.lending,
-      chain:         metric.chain,
-      market:        metric.market,
-    }]);
+      symbol: metric.symbol,
+      mintAddress: metric.mintAddress,
+      lending: metric.lending,
+      chain: metric.chain,
+      market: metric.market,
+    };
+    await ds.table('pool').insert([row]);
     console.log(`[bq] registered generic pool ${key} → id ${id}`);
   } catch (err) {
     seenGenericPools.delete(key);
@@ -61,41 +60,44 @@ async function commitGenericPool(ds, metric) {
   }
 }
 
-function safeNum(v) {
+function safeNum(v: unknown): number {
   const n = Number(v);
   return isFinite(n) ? n : 0;
 }
 
-async function commitGenericSnapshot(ds, metric) {
-  const tvl   = safeNum(metric.tvl);
+async function commitGenericSnapshot(ds: Dataset, metric: StandarizedMetric): Promise<void> {
+  const tvl = safeNum(metric.tvl);
   const utilF = safeNum(metric.utilization) / 100;
-  const borrow  = parseFloat((tvl * utilF).toFixed(9));
-  const liquid  = parseFloat((tvl - borrow).toFixed(9));
-  await ds.table('snapshots').insert([{
-    poolId:          stableGenericPoolId(metric),
-    tvl:             String(tvl),
-    utilization:     String(utilF.toFixed(9)),
-    supplyAPY:       String(safeNum(metric.supplyAPY)),
-    borrowRate:      String(safeNum(metric.borrowRate)),
-    borrowAPY:       String(safeNum(metric.borrowAPY)),
-    totalBorrowUsd:  String(borrow),
-    liquidityUsd:    String(liquid),
-    fetchedAt:       new Date().toISOString(),
-  }]);
+  const borrow = parseFloat((tvl * utilF).toFixed(9));
+  const liquid = parseFloat((tvl - borrow).toFixed(9));
+  const row: SnapshotRow = {
+    poolId: stableGenericPoolId(metric),
+    tvl: String(tvl),
+    utilization: String(utilF.toFixed(9)),
+    supplyAPY: String(safeNum(metric.supplyAPY)),
+    borrowRate: String(safeNum(metric.borrowRate)),
+    borrowAPY: String(safeNum(metric.borrowAPY)),
+    totalBorrowUsd: String(borrow),
+    liquidityUsd: String(liquid),
+    fetchedAt: new Date().toISOString(),
+  };
+  await ds.table('snapshots').insert([row]);
 }
 
-async function pollProtocols(ds) {
+async function pollProtocols(ds: Dataset): Promise<void> {
   if (isPolling) return;
   isPolling = true;
   try {
     const metrics = await fetchAllProtocolMetrics();
     console.log(`[protocols] fetched ${metrics.length} metrics`);
+    latestData = { fetchedAt: new Date().toISOString() };
+    broadcast(latestData);
     for (const metric of metrics) {
-      commitGenericPool(ds, metric).catch(err => console.error('[bq:generic:pool]', err.message));
-      commitGenericSnapshot(ds, metric).catch(err => console.error('[bq:generic:snapshot]', err.message));
+      commitGenericPool(ds, metric).catch((err: Error) => console.error('[bq:generic:pool]', err.message));
+      commitGenericSnapshot(ds, metric).catch((err: Error) => console.error('[bq:generic:snapshot]', err.message));
     }
   } catch (err) {
-    console.error('[protocols] poll error:', err.message);
+    console.error('[protocols] poll error:', (err as Error).message);
   } finally {
     isPolling = false;
   }
@@ -108,7 +110,7 @@ setInterval(() => {
   }
 }, 30_000);
 
-function handleSSE(req, res) {
+function handleSSE(req: http.IncomingMessage, res: http.ServerResponse): void {
   if (clients.size >= 100) {
     res.writeHead(503, { 'Retry-After': '10' });
     res.end();
@@ -131,7 +133,7 @@ function handleSSE(req, res) {
   req.on('close', () => clients.delete(res));
 }
 
-function requestHandler(req, res) {
+function requestHandler(req: http.IncomingMessage, res: http.ServerResponse): void {
   if (req.method === 'GET' && req.url === '/') {
     res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
     res.end(htmlContent);
@@ -146,7 +148,7 @@ function requestHandler(req, res) {
   }
 }
 
-async function main() {
+async function main(): Promise<void> {
   const base = new GoogleAuth();
   const sourceClient = await base.getClient();
 
@@ -160,7 +162,7 @@ async function main() {
   const bigquery = new BigQuery({ projectId: BQ_PROJECT, authClient: impersonated });
   console.log(`[bq] impersonating ${BQ_SA}`);
 
-  const ds = bigquery.dataset(BQ_DATASET);
+  const ds: Dataset = bigquery.dataset(BQ_DATASET);
   const server = http.createServer(requestHandler);
 
   server.listen(PORT, () => {
@@ -170,17 +172,17 @@ async function main() {
     if (process.send) process.send('ready');
   });
 
-  function shutdown() {
+  function shutdown(): void {
     for (const res of clients) res.end();
     clients.clear();
     server.close(() => process.exit(0));
   }
 
   process.on('SIGTERM', shutdown);
-  process.on('SIGINT',  shutdown);
+  process.on('SIGINT', shutdown);
 }
 
-main().catch(err => {
+main().catch((err: Error) => {
   console.error('[fatal]', err.message);
   process.exit(1);
 });
