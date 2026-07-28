@@ -1,16 +1,25 @@
 {
   "name": "data-node-poc",
   "version": "1.0.0",
-  "description": "Kamino USDC lending data SSE stream",
-  "main": "server.js",
+  "description": "Lending data SSE stream",
+  "main": "dist/server.js",
   "scripts": {
-    "start": "node server.js"
+    "build": "tsc",
+    "start": "node dist/server.js",
+    "dev": "npx tsx server.ts",
+    "create-table": "npx tsx src/create-table.ts"
   },
   "engines": {
     "node": ">=18.0.0"
   },
   "dependencies": {
     "@google-cloud/bigquery": "^7.0.0",
+    "@solana/web3.js": "^1.98.4",
     "google-auth-library": "^9.0.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.5.0",
+    "@types/node": "^20.0.0",
+    "tsx": "^4.0.0"
   }
 }

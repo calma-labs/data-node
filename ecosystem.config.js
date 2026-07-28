@@ -2,7 +2,7 @@ module.exports = {
   apps: [
     {
       name: 'data-node-poc',
-      script: 'server.js',
+      script: 'server.ts',
       instances: 1,
       exec_mode: 'cluster',
       wait_ready: true,
