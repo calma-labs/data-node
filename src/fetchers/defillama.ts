@@ -1,6 +1,9 @@
+import { DefiLlama } from '@defillama/api';
 import type { TokenHistoryPoint, TokenDataResult } from '../types.js';
 
 const MIN_TVL = 1_000;
+
+const llamaClient = new DefiLlama();
 
 const PROTOCOL_SLUGS: Record<string, string[]> = {
   save: ['save', 'solend'],
@@ -42,10 +45,7 @@ export async function fetchProtocolTotalActiveLoansFromDefiLlama(platform: strin
     if (slug === 'jupiter') slug = 'jup-lend';
     if (slug === 'marginfi') slug = 'marginfi';
 
-    const url = `https://api.llama.fi/protocol/${slug}`;
-    const res = await fetch(url);
-    if (!res.ok) return null;
-    const data = (await res.json()) as {
+    const data = await llamaClient.tvl.getProtocol(slug) as {
       currentChainTvls?: {
         borrowed?: unknown;
       };
