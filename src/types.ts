@@ -135,6 +135,7 @@ export interface PoolRow {
 }
 
 export interface SnapshotRow {
+  snapshotId: string;
   poolId: number;
   tvl: string;
   utilization: string;
@@ -164,6 +165,16 @@ export interface TokenSnapshot {
   borrowRate: number;
   utilization: number;
   protocolTotalActiveLoans?: number | null;
+  predictions?: {
+    predictedClass?: string;
+    predictedProbability?: number;
+    binnedConfidence?: number;
+  };
+  mu?: number;
+  sigma?: number;
+  apyMean30d?: number;
+  ilRisk?: string;
+  exposure?: string;
 }
 
 export interface TokenDataResult {

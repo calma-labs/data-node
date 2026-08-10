@@ -76,7 +76,7 @@ export async function fetchMorphoMetrics(): Promise<StandarizedMetric[]> {
   const markets = await fetchMorphoMarkets();
 
   return markets
-    .filter((m) => m.state.supplyAssetsUsd > 100000)
+    .filter((m) => m.state.supplyAssetsUsd > 10000)
     .map((m): StandarizedMetric => {
       const lltvRaw = m.lltv ? Number(m.lltv) / 1e18 : null;
       return {

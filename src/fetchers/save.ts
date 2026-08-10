@@ -10,7 +10,7 @@ import type {
 import { symbolMatches, downsampleToDaily } from './defillama.js';
 
 const SAVE_API = 'https://api.solend.fi';
-const MIN_TVL_USD = 100_000;
+const MIN_TVL_USD = 10_000;
 
 interface SaveHistoryPoint {
   supplyAPY: number;

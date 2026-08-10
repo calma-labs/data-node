@@ -86,7 +86,7 @@ async function fetchEarnTokens(): Promise<StandarizedMetric[]> {
         const price = parseFloat(t.asset.price) || 0;
         const totalAssets = Number(t.totalAssets) / Math.pow(10, t.decimals);
         const tvlUsd = totalAssets * price;
-        if (tvlUsd <= 100_000) return null;
+        if (tvlUsd <= 10_000) return null;
 
         const mint = new PublicKey(t.assetAddress);
         const reserve = await fetchTokenReserve(mint);
@@ -140,7 +140,7 @@ export async function fetchJupiterMetrics(): Promise<StandarizedMetric[]> {
       .filter((v) => {
         const supplyPrice = parseFloat(v.supplyToken.price) || 0;
         const supplyUsd = (Number(v.totalSupply) / Math.pow(10, v.supplyToken.decimals)) * supplyPrice;
-        return supplyUsd > 100000;
+        return supplyUsd > 10000;
       })
       .map((v): StandarizedMetric => {
         const borrowPrice = parseFloat(v.borrowToken.price) || 0;

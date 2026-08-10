@@ -74,6 +74,17 @@ interface DefiLlamaPool {
   apyReward?: number;
   apyBaseBorrow?: number;
   utilization?: number;
+  predictions?: {
+    predictedClass?: string;
+    predictedProbability?: number;
+    binnedConfidence?: number;
+  };
+  mu?: number;
+  sigma?: number;
+  apyMean30d?: number;
+  ilRisk?: string;
+  exposure?: string;
+  stablecoin?: boolean;
 }
 
 interface DefiLlamaChartEntry {
@@ -137,6 +148,12 @@ export async function fetchDefiLlamaPlot(
         supplyAPY: parseFloat(((tokenPool.apyBase ?? 0) + (tokenPool.apyReward ?? 0)).toFixed(2)),
         borrowRate: parseFloat((tokenPool.apyBaseBorrow ?? 0).toFixed(2)),
         utilization: parseFloat((tokenPool.utilization ?? 0).toFixed(2)),
+        predictions: tokenPool.predictions,
+        mu: tokenPool.mu,
+        sigma: tokenPool.sigma,
+        apyMean30d: tokenPool.apyMean30d,
+        ilRisk: tokenPool.ilRisk,
+        exposure: tokenPool.exposure,
       },
     };
   } catch {
