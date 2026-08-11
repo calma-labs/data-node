@@ -189,6 +189,7 @@ export async function fetchMorphoPlot(
     supplyAPY: parseFloat((latestState.supplyApy * 100).toFixed(2)),
     borrowRate: parseFloat((latestState.borrowApy * 100).toFixed(2)),
     utilization: parseFloat((latestState.utilization * 100).toFixed(2)),
+    lltv: best.lltv ? Number(((Number(best.lltv) / 1e18) * 100).toFixed(2)) : null,
   };
 
   return {

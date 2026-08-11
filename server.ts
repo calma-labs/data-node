@@ -17,7 +17,22 @@ const BQ_SA: string = process.env.IMPERSONATE_SA || 'lending-poc@calmal.iam.gser
 
 const htmlContent: Buffer = fs.readFileSync(path.join(__dirname, 'public', 'index.html'));
 
-let latestData: { fetchedAt: string } | null = null;
+type TableData = {
+  protocol: string;
+  symbol: string;
+  market: string;
+  collateral: string | null;
+  supplyApy: number;
+  borrowApy: number;
+  utilizationRate: number;
+  totalSupplyUsd: number;
+  totalBorrowUsd: number;
+  liquidityUsd: number;
+  fetchedAt: string;
+  isAggregated: boolean;
+};
+const latestMetricsCache = new Map<string, TableData>();
+let latestData: TableData[] | null = null;
 const clients: Set<http.ServerResponse> = new Set();
 let isPolling = false;
 const knownPools = new Set<number>();
@@ -50,34 +65,11 @@ function broadcast(data: unknown): void {
 }
 
 function stableGenericPoolId(metric: StandarizedMetric): number {
-  const key = `${metric.mintAddress}:${metric.lending}:${metric.market}`;
+  const key = `${metric.mintAddress}:${metric.lending}:${metric.market}:${metric.collateral || ''}:${metric.isAggregated ? '1' : '0'}`;
   return parseInt(crypto.createHash('sha256').update(key).digest('hex').slice(0, 8), 16);
 }
 
-/*
-async function commitGenericPool(ds: Dataset, metric: StandarizedMetric): Promise<void> {
-  const key = `${metric.mintAddress}:${metric.lending}:${metric.market}`;
-  if (seenGenericPools.has(key)) return;
-  seenGenericPools.add(key);
-  const id = stableGenericPoolId(metric);
-  try {
-    const row: PoolRow = {
-      id,
-      reservePubkey: metric.mintAddress,
-      symbol: metric.symbol,
-      mintAddress: metric.mintAddress,
-      lending: metric.lending,
-      chain: metric.chain,
-      market: metric.market,
-    };
-    await ds.table('pool').insert([row]);
-    console.log(`[bq] registered generic pool ${key} → id ${id}`);
-  } catch (err) {
-    seenGenericPools.delete(key);
-    throw err;
-  }
-}
-*/
+
 function safeNum(v: unknown): number {
   const n = Number(v);
   return isFinite(n) ? n : 0;
@@ -101,7 +93,9 @@ async function batchCommitPools(bq: BigQuery, metrics: StandarizedMetric[]): Pro
       params[`len_${idx}`] = m.lending;
       params[`ch_${idx}`] = m.chain;
       params[`mkt_${idx}`] = m.market;
-      return `SELECT @id_${idx} AS id, @rp_${idx} AS reservePubkey, @sym_${idx} AS symbol, @ma_${idx} AS mintAddress, @len_${idx} AS lending, @ch_${idx} AS chain, @mkt_${idx} AS market`;
+      params[`col_${idx}`] = m.collateral || null;
+      params[`agg_${idx}`] = m.isAggregated || false;
+      return `SELECT @id_${idx} AS id, @rp_${idx} AS reservePubkey, @sym_${idx} AS symbol, @ma_${idx} AS mintAddress, @len_${idx} AS lending, @ch_${idx} AS chain, @mkt_${idx} AS market, @col_${idx} AS collateral, @agg_${idx} AS isAggregated`;
     }).join(' UNION ALL ');
 
     const query = `
@@ -109,8 +103,8 @@ async function batchCommitPools(bq: BigQuery, metrics: StandarizedMetric[]): Pro
       USING (${selects}) AS source
       ON target.id = source.id
       WHEN NOT MATCHED THEN
-        INSERT (id, reservePubkey, symbol, mintAddress, lending, chain, market)
-        VALUES (source.id, source.reservePubkey, source.symbol, source.mintAddress, source.lending, source.chain, source.market)
+        INSERT (id, reservePubkey, symbol, mintAddress, lending, chain, market, collateral, isAggregated)
+        VALUES (source.id, source.reservePubkey, source.symbol, source.mintAddress, source.lending, source.chain, source.market, source.collateral, source.isAggregated)
     `;
 
     await bq.query({ query, params });
@@ -188,10 +182,35 @@ async function pollProtocols(bq: BigQuery | null, ds: Dataset | null, enableDebu
     const now = new Date();
     const bucket = timeBucket(now);
     
-    latestData = { fetchedAt: now.toISOString() };
-    broadcast(latestData);
-    
     const safeMetrics = metrics.filter(isMetricSafe);
+    const isoNow = now.toISOString();
+
+    for (const m of safeMetrics) {
+      const tvl = safeNum(m.tvl);
+      const utilF = safeNum(m.utilization) / 100;
+      const borrow = parseFloat((tvl * utilF).toFixed(9));
+      const liquid = parseFloat((tvl - borrow).toFixed(9));
+      
+      const key = `${m.mintAddress}:${m.lending}:${m.market}:${m.collateral || ''}:${m.isAggregated ? '1' : '0'}`;
+      
+      latestMetricsCache.set(key, {
+        protocol: m.lending,
+        symbol: m.symbol,
+        market: m.market,
+        collateral: m.collateral || null,
+        supplyApy: safeNum(m.supplyAPY),
+        borrowApy: safeNum(m.borrowAPY),
+        utilizationRate: utilF,
+        totalSupplyUsd: tvl,
+        totalBorrowUsd: borrow,
+        liquidityUsd: liquid,
+        fetchedAt: isoNow,
+        isAggregated: m.isAggregated || false
+      });
+    }
+
+    latestData = Array.from(latestMetricsCache.values());
+    broadcast(latestData);
     
     if (enableDebugDump) {
       const dumpPath = path.join(process.cwd(), 'debug_data.json');
@@ -227,14 +246,15 @@ async function queryBigQueryLatest(bq: BigQuery, protocol: string, symbol: strin
       UNIX_SECONDS(s.fetchedAt) AS date,
       SUM(s.tvl) AS tvlUsd,
       AVG(s.supplyAPY) AS supplyAPY,
-      AVG(s.borrowAPY) AS borrowAPY
+      AVG(s.utilization) AS utilization
     FROM \`${BQ_PROJECT}.${BQ_DATASET}.pool\` p
     JOIN \`${BQ_PROJECT}.${BQ_DATASET}.snapshots\` s ON p.id = s.poolId
     WHERE LOWER(p.lending) = LOWER(@protocol) 
       AND LOWER(p.symbol) = LOWER(@symbol)
+      AND p.isAggregated = TRUE
     GROUP BY s.fetchedAt
-    ORDER BY s.fetchedAt DESC
-    LIMIT 1
+    ORDER BY s.fetchedAt ASC
+    LIMIT 1000
   `;
   
   const [rows] = await bq.query({
@@ -245,17 +265,17 @@ async function queryBigQueryLatest(bq: BigQuery, protocol: string, symbol: strin
   if (!rows || rows.length === 0) return null;
   
   const history = rows.map(r => ({
-    date: Number(r.date),
-    tvlUsd: Number(r.tvlUsd),
-    supplyAPY: Number(r.supplyAPY),
-    borrowAPY: Number(r.borrowAPY)
+    date: new Date(Number(r.date) * 1000).toISOString(),
+    apy: Number(r.supplyAPY),
+    utilization: r.utilization !== null ? Number(r.utilization) * 100 : null
   }));
   
   return {
     source: "BigQuery",
     poolId: null,
+    matchedSymbol: symbol,
     history
-  } as any;
+  };
 }
 
 // Heartbeat keeps SSE connections alive through proxies
@@ -286,6 +306,7 @@ function handleSSE(req: http.IncomingMessage, res: http.ServerResponse): void {
 
   clients.add(res);
   req.on('close', () => clients.delete(res));
+  res.on('error', () => clients.delete(res));
 }
 
 function requestHandler(req: http.IncomingMessage, res: http.ServerResponse): void {
@@ -299,7 +320,7 @@ function requestHandler(req: http.IncomingMessage, res: http.ServerResponse): vo
     handleSSE(req, res);
   } else if (req.method === 'GET' && pathname === '/health') {
     res.writeHead(200, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({ status: 'ok', lastFetchedAt: latestData?.fetchedAt ?? null }));
+    res.end(JSON.stringify({ status: 'ok', lastFetchedAt: latestData?.[0]?.fetchedAt ?? null }));
   } else if (req.method === 'GET' && (pathname === '/chart' || pathname === '/api/chart')) {
     const protocol = urlObj.searchParams.get('protocol') || urlObj.searchParams.get('platform') || '';
     const symbol = urlObj.searchParams.get('symbol') || urlObj.searchParams.get('asset') || '';
@@ -365,8 +386,8 @@ async function main(): Promise<void> {
   server.listen(PORT, () => {
     console.log(`[server] listening on port ${PORT}`);
     // Change to 'true' to enable local JSON debug dumping without BQ credentials
-    pollProtocols(bigquery, ds, false);
-    setInterval(() => pollProtocols(bigquery, ds, false), POLL_MS);
+    pollProtocols(bigquery, ds, true);
+    setInterval(() => pollProtocols(bigquery, ds, true), POLL_MS);
     if (process.send) process.send('ready');
   });
 

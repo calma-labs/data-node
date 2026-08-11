@@ -238,8 +238,12 @@
   </div>
 
   <script>
+    function fmtApy(v) {
+      return v.toFixed(2) + '%';
+    }
+
     function fmtPct(v) {
-      return (v * 100).toFixed(6) + '%';
+      return (v * 100).toFixed(2) + '%';
     }
 
     function fmtUsd(v) {
@@ -268,8 +272,8 @@
         updatedAt: document.getElementById('updatedAt'),
       };
 
-      els.supplyApy.textContent = fmtPct(d.supplyApy);
-      els.borrowApy.textContent = fmtPct(d.borrowApy);
+      els.supplyApy.textContent = fmtApy(d.supplyApy);
+      els.borrowApy.textContent = fmtApy(d.borrowApy);
       els.utilRate.textContent = fmtPct(d.utilizationRate);
       els.totalSupply.textContent = fmtUsd(d.totalSupplyUsd);
       els.totalBorrows.textContent = fmtUsd(d.totalBorrowUsd);

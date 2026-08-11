@@ -14,6 +14,8 @@ const POOL_SCHEMA: BQSchemaField[] = [
   { name: 'lending', type: 'STRING', mode: 'REQUIRED' },
   { name: 'chain', type: 'STRING', mode: 'REQUIRED' },
   { name: 'market', type: 'STRING', mode: 'REQUIRED' },
+  { name: 'collateral', type: 'STRING', mode: 'NULLABLE' },
+  { name: 'isAggregated', type: 'BOOLEAN', mode: 'REQUIRED' },
 ];
 
 const SNAPSHOTS_SCHEMA: BQSchemaField[] = [
