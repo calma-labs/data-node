@@ -19,7 +19,6 @@ const POOL_SCHEMA: BQSchemaField[] = [
 ];
 
 const SNAPSHOTS_SCHEMA: BQSchemaField[] = [
-  { name: 'snapshotId', type: 'STRING', mode: 'REQUIRED' },
   { name: 'poolId', type: 'INT64', mode: 'REQUIRED' },
   { name: 'tvl', type: 'NUMERIC', mode: 'REQUIRED' },
   { name: 'utilization', type: 'NUMERIC', mode: 'REQUIRED' },
@@ -60,6 +59,7 @@ const SNAPSHOTS_SCHEMA: BQSchemaField[] = [
   const [snapshots] = await ds.createTable('snapshots', {
     schema: SNAPSHOTS_SCHEMA,
     clustering: { fields: ['poolId'] },
+    timePartitioning: { type: 'DAY', field: 'fetchedAt' },
   });
 
   console.log(`Created ${PROJECT}.${DATASET}.${pool.id}`);

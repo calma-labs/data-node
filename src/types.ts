@@ -138,7 +138,6 @@ export interface PoolRow {
 }
 
 export interface SnapshotRow {
-  snapshotId: string;
   poolId: number;
   tvl: string;
   utilization: string;
