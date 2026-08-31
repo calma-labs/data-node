@@ -20,6 +20,54 @@ export {
   fetchDefiLlamaPlot,
 };
 
+function normalizeSymbol(symbol: string): string {
+  return symbol.toUpperCase().replace(/^W(?=[A-Z])/, '');
+}
+
+function aggregateMetrics(metrics: StandarizedMetric[]): StandarizedMetric[] {
+  const groups = new Map<string, StandarizedMetric[]>();
+  for (const m of metrics) {
+    if (m.isAggregated) continue;
+    const sym = normalizeSymbol(m.symbol);
+    const key = `${m.lending}:${sym}`;
+    let list = groups.get(key);
+    if (!list) {
+      list = [];
+      groups.set(key, list);
+    }
+    list.push(m);
+  }
+  
+  const aggregated: StandarizedMetric[] = [];
+  for (const list of groups.values()) {
+    const totalTvl = list.reduce((sum, m) => sum + (m.tvl || 0), 0);
+    if (totalTvl <= 0) continue;
+    
+    const avgSupplyApy = list.reduce((sum, m) => sum + (m.supplyAPY || 0) * (m.tvl || 0), 0) / totalTvl;
+    const avgBorrowApy = list.reduce((sum, m) => sum + (m.borrowAPY || 0) * (m.tvl || 0), 0) / totalTvl;
+    const avgBorrowRate = list.reduce((sum, m) => sum + (m.borrowRate || 0) * (m.tvl || 0), 0) / totalTvl;
+    const avgUtil = list.reduce((sum, m) => sum + (m.utilization || 0) * (m.tvl || 0), 0) / totalTvl;
+    
+    const best = list.reduce((prev, curr) => (curr.tvl || 0) > (prev.tvl || 0) ? curr : prev);
+    
+    aggregated.push({
+      symbol: normalizeSymbol(best.symbol),
+      mintAddress: best.mintAddress,
+      tvl: totalTvl,
+      utilization: avgUtil,
+      supplyAPY: avgSupplyApy,
+      borrowAPY: avgBorrowApy,
+      borrowRate: avgBorrowRate,
+      lending: best.lending,
+      chain: best.chain,
+      market: 'Aggregated',
+      collateral: undefined,
+      isAggregated: true
+    });
+  }
+  return aggregated;
+}
+
 export async function fetchAllProtocolMetrics(): Promise<StandarizedMetric[]> {
   const fetchers: [string, Promise<StandarizedMetric[]>][] = [
     ['kamino',  fetchKaminoMetrics()],
@@ -38,6 +86,9 @@ export async function fetchAllProtocolMetrics(): Promise<StandarizedMetric[]> {
       console.error(`[fetchers] ${fetchers[i][0]} failed:`, r.reason?.message);
     }
   }
+
+  const aggregated = aggregateMetrics(metrics);
+  metrics.push(...aggregated);
 
   return metrics;
 }
@@ -94,7 +145,8 @@ export async function fetchPlotData(
         normProtocol,
       );
       result.snapshot.protocolTotalActiveLoans = totalActiveLoans;
-    } catch {
+    } catch (e) {
+      console.debug(`[fetchers] missing active loans for ${normProtocol}:`, (e as Error).message);
     }
   }
 

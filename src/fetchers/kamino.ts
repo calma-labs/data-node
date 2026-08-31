@@ -64,7 +64,7 @@ export async function fetchKaminoMetrics(): Promise<StandarizedMetric[]> {
       const marketName = config.name || 'isolated';
 
       return reserves
-        .filter((r) => parseFloat(r.totalSupplyUsd) > 100_000)
+        .filter((r) => parseFloat(r.totalSupplyUsd) > 10_000)
         .map((r): StandarizedMetric => {
           const totalSupplyUsd = parseFloat(r.totalSupplyUsd);
           const totalBorrowUsd = parseFloat(r.totalBorrowUsd);

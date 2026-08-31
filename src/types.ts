@@ -10,6 +10,7 @@ export type StandarizedMetric = {
   chain: string;
   market: string;
   collateral?: string;
+  isAggregated?: boolean;
   lltv?: number;
   liqThreshold?: number;
   protocolTotalActiveLoans?: number | null;
@@ -132,6 +133,8 @@ export interface PoolRow {
   lending: string;
   chain: string;
   market: string;
+  collateral: string | null;
+  isAggregated: boolean;
 }
 
 export interface SnapshotRow {
@@ -164,12 +167,23 @@ export interface TokenSnapshot {
   borrowRate: number;
   utilization: number;
   protocolTotalActiveLoans?: number | null;
+  predictions?: {
+    predictedClass?: string;
+    predictedProbability?: number;
+    binnedConfidence?: number;
+  };
+  mu?: number;
+  sigma?: number;
+  apyMean30d?: number;
+  ilRisk?: string;
+  exposure?: string;
+  lltv?: number | null;
 }
 
 export interface TokenDataResult {
   history: TokenHistoryPoint[];
-  poolId: string;
-  source: string;
+  poolId: string | null;
+  source: string | null;
   matchedSymbol: string;
   snapshot?: TokenSnapshot | null;
 }
